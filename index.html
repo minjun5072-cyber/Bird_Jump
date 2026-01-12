@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Bird Jump</title>
+
+<style>
+body {
+  margin: 0;
+  background: #222;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  font-family: Arial, sans-serif;
+}
+
+canvas {
+  background: #87ceeb;
+  border-radius: 12px;
+}
+
+.overlay {
+  position: absolute;
+  text-align: center;
+}
+
+input {
+  font-size: 18px;
+  padding: 8px;
+  margin-bottom: 10px;
+}
+
+button {
+  font-size: 20px;
+  padding: 12px 26px;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+}
+
+#startScreen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+#title {
+  font-size: 52px;
+  font-weight: bold;
+  margin-bottom: 20px;
+}
+
+#startBird {
+  width: 140px;
+  margin-top: 20px;
+}
+
+#rankingList {
+  margin-top: 10px;
+  font-size: 16px;
+  white-space: pre-line;
+}
+</style>
+</head>
+
+<body>
+
+<!-- Firebase CDN -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+<audio id="titleBgm" src="title_bgm.mp3"></audio>
+<audio id="gameBgm" src="game_bgm.mp3"></audio>
+
+<canvas id="game" width="360" height="640"></canvas>
+
+<!-- 시작 화면 -->
+<div id="startScreen" class="overlay">
+  <div id="title">Bird Jump</div>
+  <input id="nicknameInput" placeholder="닉네임 입력" />
+  <button onclick="startGame()">게임 시작</button>
+  <img id="startBird" src="bird.png">
+</div>
+
+<!-- 게임 오버 -->
+<div id="gameOverScreen" class="overlay" style="display:none">
+  <h1>GAME OVER</h1>
+  <p id="resultText"></p>
+  <h3>🏆 TOP 5</h3>
+  <div id="rankingList"></div>
+  <button onclick="restartGame()">다시 시작</button>
+</div>
+
+<script>
+/* ================= Firebase ================= */
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  databaseURL: "https://YOUR_PROJECT.firebaseio.com",
+  projectId: "YOUR_PROJECT"
+};
+
+firebase.initializeApp(firebaseConfig);
+const database = firebase.database();
+
+/* ================= 기본 ================= */
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const birdImg = new Image();
+birdImg.src = "bird.png";
+
+let nickname = "";
+let gameState = "start";
+
+const gravity = 0.5;
+const jumpPower = -8;
+const gapHeight = 160;
+
+let bird, pipes, frame;
+let score = 0;
+let speed = 2;
+let startTime = 0;
+
+/* ================= 초기화 ================= */
+function resetGame() {
+  bird = { x: 90, y: canvas.height / 2, size: 40, velocity: 0 };
+  pipes = [];
+  frame = 0;
+  score = 0;
+  speed = 2;
+}
+
+/* ================= 시작 ================= */
+function startGame() {
+  nickname = document.getElementById("nicknameInput").value.trim();
+  if (!nickname) {
+    alert("닉네임을 입력하세요!");
+    return;
+  }
+
+  resetGame();
+  gameState = "play";
+  startTime = Date.now();
+
+  document.getElementById("startScreen").style.display = "none";
+  document.getElementById("gameOverScreen").style.display = "none";
+}
+
+/* ================= 저장 ================= */
+function saveScore(score, time) {
+  database.ref("ranking").push({
+    nickname,
+    score,
+    time,
+    createdAt: Date.now()
+  });
+}
+
+/* ================= 랭킹 불러오기 ================= */
+function loadRanking() {
+  database.ref("ranking")
+    .orderByChild("score")
+    .limitToLast(5)
+    .once("value", snap => {
+      const data = snap.val();
+      if (!data) return;
+
+      const list = Object.values(data)
+        .sort((a, b) => b.score - a.score);
+
+      let text = "";
+      list.forEach((r, i) => {
+        text += `${i+1}. ${r.nickname} - ${r.score}점 (${r.time}초)\n`;
+      });
+
+      document.getElementById("rankingList").innerText = text;
+    });
+}
+
+/* ================= 게임 오버 ================= */
+function gameOver() {
+  if (gameState !== "play") return;
+  gameState = "gameover";
+
+  const survive = ((Date.now() - startTime) / 1000).toFixed(1);
+  saveScore(score, survive);
+  loadRanking();
+
+  document.getElementById("resultText").innerText =
+    `점수: ${score}\n생존 시간: ${survive}초`;
+
+  document.getElementById("gameOverScreen").style.display = "block";
+}
+
+/* ================= 재시작 ================= */
+function restartGame() {
+  document.getElementById("startScreen").style.display = "flex";
+  document.getElementById("gameOverScreen").style.display = "none";
+}
+
+/* ================= 입력 ================= */
+canvas.addEventListener("mousedown", () => {
+  if (gameState === "play") bird.velocity = jumpPower;
+});
+
+/* ================= 파이프 ================= */
+function createPipe() {
+  const gapY = Math.random() * (canvas.height - gapHeight - 120) + 60;
+  pipes.push({ x: canvas.width, width: 60, gapY, passed: false });
+}
+
+/* ================= 업데이트 ================= */
+function update() {
+  if (gameState !== "play") return;
+
+  bird.velocity += gravity;
+  bird.y += bird.velocity;
+
+  if (bird.y <= 0 || bird.y + bird.size >= canvas.height) gameOver();
+
+  if (frame % 120 === 0) createPipe();
+
+  pipes.forEach(p => {
+    p.x -= speed;
+
+    if (!p.passed && p.x + p.width < bird.x) {
+      p.passed = true;
+      score++;
+      if (score % 5 === 0) speed += 0.5;
+    }
+
+    if (
+      bird.x + bird.size > p.x &&
+      bird.x < p.x + p.width &&
+      (bird.y < p.gapY || bird.y + bird.size > p.gapY + gapHeight)
+    ) gameOver();
+  });
+
+  pipes = pipes.filter(p => p.x + p.width > 0);
+  frame++;
+}
+
+/* ================= 그리기 ================= */
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (gameState === "play") {
+    ctx.drawImage(birdImg, bird.x, bird.y, bird.size, bird.size);
+  }
+
+  ctx.fillStyle = "#4CAF50";
+  pipes.forEach(p => {
+    ctx.fillRect(p.x, 0, p.width, p.gapY);
+    ctx.fillRect(p.x, p.gapY + gapHeight, p.width, canvas.height);
+  });
+
+  ctx.fillStyle = "#000";
+  ctx.font = "24px Arial";
+  ctx.fillText(`점수: ${score}`, 20, 40);
+}
+
+/* ================= 루프 ================= */
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+resetGame();
+loop();
+</script>
+
+</body>
+</html>
